@@ -1,0 +1,32 @@
+Features CSV : features.csv
+Train rows   : 1055   Test rows: 264
+CV F1        : 0.9928 ± 0.0039
+CV Accuracy  : 0.9915 ± 0.0046
+ROC-AUC      : 0.9989
+
+Classification report:
+              precision    recall  f1-score   support
+
+       alert       0.98      1.00      0.99       106
+      drowsy       1.00      0.99      0.99       158
+
+    accuracy                           0.99       264
+   macro avg       0.99      0.99      0.99       264
+weighted avg       0.99      0.99      0.99       264
+
+Confusion matrix:
+[[106   0]
+ [  2 156]]
+
+Feature importances:
+  left_ear            0.4823
+  ear_mar_ratio       0.2292
+  mar                 0.1204
+  ear                 0.0349
+  head_yaw            0.0331
+  face_width          0.0239
+  pitch_abs           0.0235
+  ear_diff            0.0213
+  right_ear           0.0157
+  head_pitch          0.0120
+  yaw_abs             0.0038

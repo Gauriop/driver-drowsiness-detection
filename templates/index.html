@@ -1,0 +1,1762 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DrowseGuard — Driver Drowsiness Detection</title>
+    <style>
+      @import url("https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap");
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+      :root {
+        --bg: #080c10;
+        --surface: #0e1318;
+        --card: #131920;
+        --border: #1e2830;
+        --text: #c8d8e8;
+        --muted: #4a6070;
+        --alert: #00e676;
+        --warn: #ff9100;
+        --drowsy: #ff1744;
+        --accent: #00b4d8;
+        --distract: #ff6d00;
+        --gbm: #7c3aed;
+      }
+      body {
+        font-family: "Rajdhani", sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        min-height: 100vh;
+      }
+
+      /* ── overlays ── */
+      #drowsy-overlay {
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        z-index: 999;
+        opacity: 0;
+        transition: opacity 0.3s;
+        box-shadow: inset 0 0 80px 40px rgba(255, 23, 68, 0.55);
+      }
+      #drowsy-overlay.active {
+        opacity: 1;
+        animation: glow-pulse 0.6s ease-in-out infinite alternate;
+      }
+      @keyframes glow-pulse {
+        from {
+          box-shadow: inset 0 0 60px 30px rgba(255, 23, 68, 0.4);
+        }
+        to {
+          box-shadow: inset 0 0 120px 60px rgba(255, 23, 68, 0.75);
+        }
+      }
+      #distract-overlay {
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        z-index: 998;
+        opacity: 0;
+        transition: opacity 0.3s;
+        box-shadow: inset 0 0 70px 35px rgba(255, 109, 0, 0.45);
+      }
+      #distract-overlay.active {
+        opacity: 1;
+        animation: distract-pulse 0.7s ease-in-out infinite alternate;
+      }
+      @keyframes distract-pulse {
+        from {
+          box-shadow: inset 0 0 50px 25px rgba(255, 109, 0, 0.3);
+        }
+        to {
+          box-shadow: inset 0 0 100px 50px rgba(255, 109, 0, 0.6);
+        }
+      }
+      #yawn-banner {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        z-index: 997;
+        background: rgba(255, 145, 0, 0.9);
+        color: #000;
+        text-align: center;
+        font-size: 1rem;
+        font-weight: 700;
+        letter-spacing: 0.1em;
+        padding: 9px;
+        transform: translateY(100%);
+        transition: transform 0.25s;
+      }
+      #yawn-banner.active {
+        transform: translateY(0);
+      }
+
+      /* ── topbar ── */
+      .topbar {
+        background: var(--surface);
+        border-bottom: 1px solid var(--border);
+        padding: 0.75rem 2rem;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+      .logo {
+        font-size: 1.4rem;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        color: #fff;
+      }
+      .logo span {
+        color: var(--accent);
+      }
+      .mode-tabs {
+        display: flex;
+        gap: 4px;
+        background: var(--bg);
+        border-radius: 8px;
+        padding: 3px;
+        border: 1px solid var(--border);
+      }
+      .tab {
+        padding: 6px 18px;
+        border-radius: 6px;
+        font-size: 13px;
+        font-weight: 600;
+        cursor: pointer;
+        border: none;
+        background: transparent;
+        color: var(--muted);
+        transition: all 0.15s;
+      }
+      .tab.active {
+        background: var(--accent);
+        color: #000;
+      }
+      .topbar-right {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+      }
+      .status-pill {
+        font-family: "JetBrains Mono", monospace;
+        font-size: 12px;
+        padding: 4px 14px;
+        border-radius: 99px;
+        border: 1px solid var(--alert);
+        color: var(--alert);
+        animation: pulse-g 2s infinite;
+      }
+      @keyframes pulse-g {
+        0%,
+        100% {
+          opacity: 1;
+        }
+        50% {
+          opacity: 0.6;
+        }
+      }
+      .sound-wrap {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12px;
+        letter-spacing: 0.04em;
+        color: var(--muted);
+      }
+      .tog {
+        position: relative;
+        width: 28px;
+        height: 16px;
+        background: var(--border);
+        border-radius: 8px;
+        cursor: pointer;
+        transition: background 0.2s;
+        flex-shrink: 0;
+      }
+      .tog.on {
+        background: var(--alert);
+      }
+      .tog-knob {
+        position: absolute;
+        top: 2px;
+        left: 2px;
+        width: 12px;
+        height: 12px;
+        background: #fff;
+        border-radius: 50%;
+        transition: transform 0.18s;
+      }
+      .tog.on .tog-knob {
+        transform: translateX(12px);
+      }
+
+      /* ── layout ── */
+      .main {
+        display: grid;
+        grid-template-columns: 1fr 300px;
+        gap: 14px;
+        padding: 14px 18px;
+        max-width: 1200px;
+        margin: 0 auto;
+      }
+
+      /* ── video panel ── */
+      .video-panel {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        overflow: hidden;
+      }
+      .video-header {
+        padding: 10px 14px;
+        border-bottom: 1px solid var(--border);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+      .video-label {
+        font-size: 13px;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+      .rec-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--drowsy);
+        animation: blink 0.8s step-end infinite;
+        display: inline-block;
+        margin-right: 6px;
+      }
+      @keyframes blink {
+        0%,
+        100% {
+          opacity: 1;
+        }
+        50% {
+          opacity: 0;
+        }
+      }
+      .video-wrap {
+        position: relative;
+        background: #000;
+        min-height: 360px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      #webcam-stream {
+        width: 100%;
+        display: block;
+      }
+      .video-wrap.drowsy-border {
+        box-shadow: 0 0 0 4px var(--drowsy);
+        animation: border-pulse 0.5s ease-in-out infinite alternate;
+      }
+      .video-wrap.distract-border {
+        box-shadow: 0 0 0 4px var(--distract);
+        animation: border-pulse-d 0.5s ease-in-out infinite alternate;
+      }
+      @keyframes border-pulse {
+        from {
+          box-shadow: 0 0 0 3px rgba(255, 23, 68, 0.6);
+        }
+        to {
+          box-shadow: 0 0 0 7px rgba(255, 23, 68, 1);
+        }
+      }
+      @keyframes border-pulse-d {
+        from {
+          box-shadow: 0 0 0 3px rgba(255, 109, 0, 0.6);
+        }
+        to {
+          box-shadow: 0 0 0 7px rgba(255, 109, 0, 1);
+        }
+      }
+
+      /* ── UPLOAD ZONE (new) ── */
+      #upload-zone {
+        display: none;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        min-height: 360px;
+        gap: 0;
+        padding: 0;
+        cursor: pointer;
+        position: relative;
+        width: 100%;
+      }
+      #upload-droparea {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 12px;
+        padding: 2rem;
+        width: 100%;
+        min-height: 360px;
+        border: 2px dashed var(--border);
+        margin: 12px;
+        border-radius: 8px;
+        transition: border-color 0.2s;
+        position: relative;
+        box-sizing: border-box;
+        cursor: pointer;
+      }
+      #upload-droparea:hover {
+        border-color: var(--accent);
+      }
+      #upload-droparea input {
+        position: absolute;
+        inset: 0;
+        opacity: 0;
+        cursor: pointer;
+        width: 100%;
+        height: 100%;
+      }
+      .upload-icon {
+        width: 52px;
+        height: 52px;
+        border-radius: 12px;
+        background: rgba(0, 180, 216, 0.08);
+        border: 1px solid rgba(0, 180, 216, 0.25);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.5rem;
+      }
+      .upload-text {
+        font-size: 15px;
+        color: var(--muted);
+      }
+      .upload-text strong {
+        color: var(--accent);
+      }
+
+      /* GBM badge in upload area */
+      .gbm-badge-upload {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        background: rgba(124, 58, 237, 0.15);
+        border: 1px solid rgba(124, 58, 237, 0.4);
+        border-radius: 6px;
+        padding: 4px 12px;
+        font-family: "JetBrains Mono", monospace;
+        font-size: 11px;
+        color: #a78bfa;
+        letter-spacing: 0.05em;
+      }
+      .gbm-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: #7c3aed;
+        flex-shrink: 0;
+      }
+
+      /* ── PREPROCESSING PIPELINE (shows during analysis) ── */
+      #preprocess-panel {
+        display: none;
+        flex-direction: column;
+        width: 100%;
+        padding: 16px 20px;
+        gap: 10px;
+        background: #0a0f14;
+        min-height: 360px;
+        justify-content: center;
+      }
+      .pp-title {
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: var(--muted);
+        margin-bottom: 4px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .pp-title::after {
+        content: "";
+        flex: 1;
+        height: 1px;
+        background: var(--border);
+      }
+      .pp-steps {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .pp-step {
+        display: flex;
+        align-items: flex-start;
+        gap: 12px;
+        padding: 10px 12px;
+        border-radius: 8px;
+        background: var(--card);
+        border: 1px solid var(--border);
+        transition:
+          border-color 0.3s,
+          background 0.3s;
+      }
+      .pp-step.active {
+        border-color: var(--accent);
+        background: rgba(0, 180, 216, 0.06);
+      }
+      .pp-step.done {
+        border-color: #00e676;
+        background: rgba(0, 230, 118, 0.05);
+      }
+      .pp-step.error {
+        border-color: var(--drowsy);
+        background: rgba(255, 23, 68, 0.06);
+      }
+      .pp-icon {
+        width: 32px;
+        height: 32px;
+        border-radius: 8px;
+        background: var(--border);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1rem;
+        flex-shrink: 0;
+        transition: background 0.3s;
+      }
+      .pp-step.active .pp-icon {
+        background: rgba(0, 180, 216, 0.18);
+      }
+      .pp-step.done .pp-icon {
+        background: rgba(0, 230, 118, 0.15);
+      }
+      .pp-step.error .pp-icon {
+        background: rgba(255, 23, 68, 0.15);
+      }
+      .pp-info {
+        flex: 1;
+      }
+      .pp-name {
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--text);
+      }
+      .pp-desc {
+        font-family: "JetBrains Mono", monospace;
+        font-size: 10px;
+        color: var(--muted);
+        margin-top: 2px;
+      }
+      .pp-status {
+        font-family: "JetBrains Mono", monospace;
+        font-size: 10px;
+        color: var(--muted);
+        flex-shrink: 0;
+        align-self: center;
+      }
+      .pp-step.active .pp-status {
+        color: var(--accent);
+      }
+      .pp-step.done .pp-status {
+        color: var(--alert);
+      }
+      .pp-step.error .pp-status {
+        color: var(--drowsy);
+      }
+
+      /* feature output box */
+      #feature-box {
+        display: none;
+        margin-top: 4px;
+        padding: 10px 12px;
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        font-family: "JetBrains Mono", monospace;
+        font-size: 10px;
+        color: var(--muted);
+        line-height: 1.7;
+      }
+      #feature-box .fv {
+        color: #e2e8f0;
+      }
+      #feature-box .fok {
+        color: var(--alert);
+      }
+      #feature-box .fwarn {
+        color: var(--warn);
+      }
+      #feature-box .fbad {
+        color: var(--drowsy);
+      }
+
+      #result-img {
+        width: 100%;
+        display: none;
+      }
+
+      #status-overlay {
+        position: absolute;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        background: linear-gradient(transparent, rgba(0, 0, 0, 0.85));
+        padding: 10px 14px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .status-badge {
+        font-family: "JetBrains Mono", monospace;
+        font-size: 13px;
+        font-weight: 500;
+        padding: 4px 14px;
+        border-radius: 6px;
+        letter-spacing: 0.1em;
+        transition: all 0.2s;
+      }
+      .status-badge.ALERT {
+        background: rgba(0, 230, 118, 0.15);
+        color: var(--alert);
+        border: 1px solid var(--alert);
+      }
+      .status-badge.WARNING {
+        background: rgba(255, 145, 0, 0.15);
+        color: var(--warn);
+        border: 1px solid var(--warn);
+      }
+      .status-badge.DROWSY {
+        background: rgba(255, 23, 68, 0.2);
+        color: var(--drowsy);
+        border: 1px solid var(--drowsy);
+        animation: flash 0.4s linear infinite;
+      }
+      .status-badge.DISTRACTED {
+        background: rgba(255, 109, 0, 0.2);
+        color: var(--distract);
+        border: 1px solid var(--distract);
+        animation: flash 0.4s linear infinite;
+      }
+      .status-badge.YAWNING {
+        background: rgba(255, 145, 0, 0.15);
+        color: var(--warn);
+        border: 1px solid var(--warn);
+      }
+      .status-badge.TOO_FAR {
+        background: rgba(0, 180, 216, 0.12);
+        color: var(--accent);
+        border: 1px solid var(--accent);
+      }
+      .status-badge.NO_FACE {
+        background: rgba(74, 96, 112, 0.15);
+        color: var(--muted);
+        border: 1px solid var(--border);
+      }
+      @keyframes flash {
+        0%,
+        100% {
+          opacity: 1;
+        }
+        50% {
+          opacity: 0.35;
+        }
+      }
+      .ear-readout {
+        font-family: "JetBrains Mono", monospace;
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      /* model chip in overlay */
+      .model-chip {
+        margin-left: auto;
+        font-family: "JetBrains Mono", monospace;
+        font-size: 10px;
+        padding: 3px 9px;
+        border-radius: 4px;
+        background: rgba(124, 58, 237, 0.2);
+        border: 1px solid rgba(124, 58, 237, 0.4);
+        color: #a78bfa;
+      }
+
+      /* ── right panel ── */
+      .right-panel {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .panel-card {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        overflow: hidden;
+      }
+      .panel-title {
+        padding: 9px 13px;
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--muted);
+        border-bottom: 1px solid var(--border);
+      }
+
+      .gauge-wrap {
+        padding: 14px;
+        text-align: center;
+      }
+      .score-num {
+        font-size: 3rem;
+        font-weight: 700;
+        font-family: "JetBrains Mono", monospace;
+        transition: color 0.3s;
+        line-height: 1;
+      }
+      .score-label {
+        font-size: 11px;
+        color: var(--muted);
+        margin-top: 3px;
+        letter-spacing: 0.06em;
+      }
+      .gauge-bar-bg {
+        height: 7px;
+        background: var(--border);
+        border-radius: 99px;
+        margin: 12px 0 3px;
+        overflow: hidden;
+      }
+      .gauge-bar-fill {
+        height: 100%;
+        border-radius: 99px;
+        width: 0%;
+        transition:
+          width 0.4s ease,
+          background 0.4s;
+      }
+      .gauge-ticks {
+        display: flex;
+        justify-content: space-between;
+        font-family: "JetBrains Mono", monospace;
+        font-size: 10px;
+        color: var(--muted);
+      }
+
+      .eye-prog-wrap {
+        padding: 0 14px 12px;
+      }
+      .ep-label {
+        display: flex;
+        justify-content: space-between;
+        font-family: "JetBrains Mono", monospace;
+        font-size: 10px;
+        color: var(--muted);
+        margin-bottom: 5px;
+      }
+      .ep-bg {
+        height: 5px;
+        background: var(--border);
+        border-radius: 99px;
+        overflow: hidden;
+      }
+      .ep-fill {
+        height: 100%;
+        border-radius: 99px;
+        background: var(--accent);
+        transition:
+          width 0.12s,
+          background 0.2s;
+      }
+
+      .yawn-indicator {
+        margin: 0 14px 10px;
+        padding: 8px 12px;
+        border-radius: 8px;
+        background: var(--bg);
+        border: 1px solid var(--border);
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        transition:
+          border-color 0.2s,
+          background 0.2s;
+      }
+      .yawn-indicator.active {
+        border-color: var(--warn);
+        background: rgba(255, 145, 0, 0.07);
+      }
+      .yawn-dot {
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        background: var(--muted);
+        flex-shrink: 0;
+        transition: background 0.2s;
+      }
+      .yawn-indicator.active .yawn-dot {
+        background: var(--warn);
+      }
+      .yawn-text {
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--muted);
+        transition: color 0.2s;
+        flex: 1;
+      }
+      .yawn-indicator.active .yawn-text {
+        color: var(--warn);
+      }
+      .yawn-count-badge {
+        font-family: "JetBrains Mono", monospace;
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .yawn-indicator.active .yawn-count-badge {
+        color: var(--warn);
+      }
+
+      .distract-indicator {
+        margin: 0 14px 12px;
+        padding: 8px 12px;
+        border-radius: 8px;
+        background: var(--bg);
+        border: 1px solid var(--border);
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        transition:
+          border-color 0.2s,
+          background 0.2s;
+      }
+      .distract-indicator.active {
+        border-color: var(--distract);
+        background: rgba(255, 109, 0, 0.07);
+      }
+      .di-dot {
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        background: var(--muted);
+        flex-shrink: 0;
+        transition: background 0.2s;
+      }
+      .distract-indicator.active .di-dot {
+        background: var(--distract);
+      }
+      .di-text {
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--muted);
+        transition: color 0.2s;
+        flex: 1;
+      }
+      .distract-indicator.active .di-text {
+        color: var(--distract);
+      }
+      .di-gaze {
+        font-family: "JetBrains Mono", monospace;
+        font-size: 11px;
+        color: var(--muted);
+      }
+      .distract-indicator.active .di-gaze {
+        color: var(--distract);
+      }
+
+      .ear-section {
+        padding: 12px 14px;
+      }
+      .ear-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 7px;
+      }
+      .ear-side {
+        font-size: 11px;
+        color: var(--muted);
+        width: 36px;
+        font-weight: 600;
+      }
+      .ear-bar-bg {
+        flex: 1;
+        height: 5px;
+        background: var(--border);
+        border-radius: 99px;
+        overflow: hidden;
+      }
+      .ear-bar-fill {
+        height: 100%;
+        border-radius: 99px;
+        background: var(--accent);
+        transition: width 0.2s;
+      }
+      .ear-val {
+        font-family: "JetBrains Mono", monospace;
+        font-size: 11px;
+        color: var(--text);
+        width: 38px;
+        text-align: right;
+      }
+      .ear-note {
+        font-size: 10px;
+        color: var(--muted);
+        margin-top: 4px;
+      }
+      .ear-note span {
+        color: var(--warn);
+      }
+      .mar-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-top: 9px;
+        padding-top: 9px;
+        border-top: 1px solid var(--border);
+      }
+      .mar-fill {
+        height: 100%;
+        border-radius: 99px;
+        background: var(--warn);
+        transition: width 0.2s;
+      }
+
+      .metrics-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 1px;
+        background: var(--border);
+      }
+      .metric-cell {
+        background: var(--card);
+        padding: 10px 12px;
+      }
+      .metric-label {
+        font-size: 10px;
+        font-weight: 600;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--muted);
+        margin-bottom: 3px;
+      }
+      .metric-val {
+        font-family: "JetBrains Mono", monospace;
+        font-size: 1.2rem;
+        font-weight: 500;
+        color: #fff;
+      }
+
+      .dist-row {
+        padding: 9px 14px;
+        border-top: 1px solid var(--border);
+        display: flex;
+        align-items: center;
+        gap: 7px;
+      }
+      .dist-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: var(--alert);
+        flex-shrink: 0;
+        transition: background 0.2s;
+      }
+      .dist-dot.far {
+        background: var(--accent);
+      }
+      .dist-txt {
+        font-family: "JetBrains Mono", monospace;
+        font-size: 10px;
+        color: var(--muted);
+      }
+
+      .alert-list {
+        max-height: 110px;
+        overflow-y: auto;
+        padding: 7px 13px;
+      }
+      .alert-item {
+        font-family: "JetBrains Mono", monospace;
+        font-size: 10px;
+        padding: 3px 0;
+        border-bottom: 1px solid var(--border);
+      }
+      .alert-item.drowsy {
+        color: var(--drowsy);
+      }
+      .alert-item.distract {
+        color: var(--distract);
+      }
+      .alert-item.yawn {
+        color: var(--warn);
+      }
+      .alert-item:last-child {
+        border: none;
+      }
+      .no-events {
+        font-size: 11px;
+        color: var(--muted);
+        padding: 7px 0;
+      }
+
+      .actions {
+        padding: 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 7px;
+      }
+      .action-btn {
+        padding: 9px;
+        border-radius: 8px;
+        font-family: "Rajdhani", sans-serif;
+        font-size: 13px;
+        font-weight: 600;
+        letter-spacing: 0.06em;
+        cursor: pointer;
+        border: 1px solid var(--border);
+        background: transparent;
+        color: var(--text);
+        transition: all 0.15s;
+      }
+      .action-btn:hover {
+        background: var(--border);
+      }
+      .action-btn.primary {
+        background: var(--accent);
+        color: #000;
+        border-color: var(--accent);
+      }
+      .action-btn.primary:hover {
+        opacity: 0.85;
+      }
+      .action-btn:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+      }
+
+      /* spinner */
+      .spinner {
+        width: 14px;
+        height: 14px;
+        border: 2px solid rgba(0, 0, 0, 0.3);
+        border-top-color: #000;
+        border-radius: 50%;
+        animation: spin 0.6s linear infinite;
+        display: inline-block;
+        vertical-align: middle;
+        margin-right: 6px;
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="drowsy-overlay"></div>
+    <div id="distract-overlay"></div>
+    <div id="yawn-banner">
+      &#9888; YAWNING DETECTED — CONSIDER TAKING A BREAK
+    </div>
+
+    <div class="topbar">
+      <div class="logo">Drowse<span>Guard</span></div>
+      <div class="mode-tabs">
+        <button class="tab active" id="tab-live" onclick="switchMode('live')">
+          Live Webcam
+        </button>
+        <button class="tab" id="tab-upload" onclick="switchMode('upload')">
+          Upload Image
+        </button>
+      </div>
+      <div class="topbar-right">
+        <div class="sound-wrap">
+          <span>Alarm</span>
+          <div class="tog on" id="snd-tog" onclick="toggleSound()">
+            <div class="tog-knob"></div>
+          </div>
+        </div>
+        <div class="status-pill">
+          <span class="rec-dot"></span>SYSTEM ACTIVE
+        </div>
+      </div>
+    </div>
+
+    <div class="main">
+      <!-- VIDEO PANEL -->
+      <div class="video-panel">
+        <div class="video-header">
+          <span class="video-label"
+            ><span class="rec-dot"></span>Camera Feed</span
+          >
+          <span
+            id="frame-counter"
+            style="
+              font-family: &quot;JetBrains Mono&quot;, monospace;
+              font-size: 11px;
+              color: var(--muted);
+            "
+            >Frame: 0</span
+          >
+        </div>
+        <div class="video-wrap" id="video-wrap">
+          <!-- LIVE -->
+          <img id="webcam-stream" src="/video_feed" alt="Live feed" />
+
+          <!-- UPLOAD DROP AREA -->
+          <div id="upload-zone">
+            <div id="upload-droparea">
+              <input type="file" id="file-input" accept=".jpg,.jpeg,.png" />
+              <div class="upload-icon">📷</div>
+              <p class="upload-text">
+                <strong>Click to upload</strong> or drag &amp; drop
+              </p>
+              <p
+                style="
+                  font-size: 11px;
+                  color: var(--muted);
+                  font-family: &quot;JetBrains Mono&quot;, monospace;
+                "
+              >
+                JPG · PNG · max 16MB
+              </p>
+              <div class="gbm-badge-upload">
+                <div class="gbm-dot"></div>
+                GBM · MediaPipe · F1=0.97 · AUC=0.99
+              </div>
+            </div>
+          </div>
+
+          <!-- PREPROCESSING PIPELINE PANEL -->
+          <div id="preprocess-panel">
+            <div class="pp-title">GBM Pipeline — Processing</div>
+            <div class="pp-steps">
+              <div class="pp-step" id="step-decode">
+                <div class="pp-icon">🖼️</div>
+                <div class="pp-info">
+                  <div class="pp-name">Image Decode</div>
+                  <div class="pp-desc">cv2.imread → BGR → RGB conversion</div>
+                </div>
+                <div class="pp-status" id="step-decode-st">waiting</div>
+              </div>
+              <div class="pp-step" id="step-mp">
+                <div class="pp-icon">🧠</div>
+                <div class="pp-info">
+                  <div class="pp-name">MediaPipe FaceLandmarker</div>
+                  <div class="pp-desc">
+                    478 3D landmarks · face_landmarker.task (float16)
+                  </div>
+                </div>
+                <div class="pp-status" id="step-mp-st">waiting</div>
+              </div>
+              <div class="pp-step" id="step-ear">
+                <div class="pp-icon">👁️</div>
+                <div class="pp-info">
+                  <div class="pp-name">EAR — Eye Aspect Ratio</div>
+                  <div class="pp-desc">
+                    left_ear, right_ear, avg_ear · threshold 0.21
+                  </div>
+                </div>
+                <div class="pp-status" id="step-ear-st">waiting</div>
+              </div>
+              <div class="pp-step" id="step-mar">
+                <div class="pp-icon">👄</div>
+                <div class="pp-info">
+                  <div class="pp-name">MAR — Mouth Aspect Ratio</div>
+                  <div class="pp-desc">yawn detection · threshold 0.60</div>
+                </div>
+                <div class="pp-status" id="step-mar-st">waiting</div>
+              </div>
+              <div class="pp-step" id="step-head">
+                <div class="pp-icon">🧭</div>
+                <div class="pp-info">
+                  <div class="pp-name">Head Pose &amp; Gaze</div>
+                  <div class="pp-desc">
+                    yaw / pitch · gaze: CENTER / LEFT / RIGHT / UP / DOWN
+                  </div>
+                </div>
+                <div class="pp-status" id="step-head-st">waiting</div>
+              </div>
+              <div class="pp-step" id="step-gbm">
+                <div class="pp-icon">⚡</div>
+                <div class="pp-info">
+                  <div class="pp-name">GBM Classifier (400 trees)</div>
+                  <div class="pp-desc">
+                    StandardScaler → GradientBoostingClassifier · 11 features
+                  </div>
+                </div>
+                <div class="pp-status" id="step-gbm-st">waiting</div>
+              </div>
+            </div>
+            <!-- live feature values -->
+            <div id="feature-box"></div>
+          </div>
+
+          <!-- RESULT IMAGE -->
+          <img id="result-img" src="" alt="Result" />
+
+          <div id="status-overlay">
+            <span class="status-badge ALERT" id="status-badge">ALERT</span>
+            <span class="ear-readout" id="ear-overlay-text"
+              >EAR: — | MAR: — | Gaze: —</span
+            >
+            <span class="model-chip" id="model-chip">GBM</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- RIGHT PANEL -->
+      <div class="right-panel">
+        <!-- Score -->
+        <div class="panel-card">
+          <div class="panel-title">Drowsiness Score</div>
+          <div class="gauge-wrap">
+            <div class="score-num" id="score-num" style="color: var(--alert)">
+              0
+            </div>
+            <div class="score-label">out of 100</div>
+            <div class="gauge-bar-bg">
+              <div
+                class="gauge-bar-fill"
+                id="gauge-fill"
+                style="background: var(--alert); width: 0%"
+              ></div>
+            </div>
+            <div class="gauge-ticks">
+              <span>Alert</span><span>Warning</span><span>Drowsy</span>
+            </div>
+          </div>
+          <div class="eye-prog-wrap">
+            <div class="ep-label">
+              <span>Eye closure progress</span
+              ><span id="consec-label">0 / 48 frames</span>
+            </div>
+            <div class="ep-bg">
+              <div class="ep-fill" id="eye-prog" style="width: 0%"></div>
+            </div>
+          </div>
+          <div class="yawn-indicator" id="yawn-ind">
+            <div class="yawn-dot"></div>
+            <span class="yawn-text">Yawn monitor</span>
+            <span class="yawn-count-badge" id="yawn-count">0 yawns</span>
+          </div>
+          <div class="distract-indicator" id="distract-ind">
+            <div class="di-dot"></div>
+            <span class="di-text">Distraction monitor</span>
+            <span class="di-gaze" id="gaze-label">CENTER</span>
+          </div>
+        </div>
+
+        <!-- EAR + MAR -->
+        <div class="panel-card">
+          <div class="panel-title">Eye &amp; Mouth Metrics</div>
+          <div class="ear-section">
+            <div class="ear-row">
+              <span class="ear-side">LEFT</span>
+              <div class="ear-bar-bg">
+                <div
+                  class="ear-bar-fill"
+                  id="l-ear-bar"
+                  style="width: 60%"
+                ></div>
+              </div>
+              <span class="ear-val" id="l-ear-val">0.30</span>
+            </div>
+            <div class="ear-row">
+              <span class="ear-side">RIGHT</span>
+              <div class="ear-bar-bg">
+                <div
+                  class="ear-bar-fill"
+                  id="r-ear-bar"
+                  style="width: 60%"
+                ></div>
+              </div>
+              <span class="ear-val" id="r-ear-val">0.30</span>
+            </div>
+            <div class="ear-note">
+              EAR threshold: <span>0.21</span> | Alert after
+              <span>48 frames (1.6s)</span>
+            </div>
+            <div class="mar-row">
+              <span class="ear-side">MOUTH</span>
+              <div class="ear-bar-bg">
+                <div
+                  class="ear-bar-fill mar-fill"
+                  id="mar-bar"
+                  style="width: 0%"
+                ></div>
+              </div>
+              <span class="ear-val" id="mar-val">0.00</span>
+            </div>
+            <div class="ear-note">
+              MAR threshold: <span>0.60</span> — yawn, no beep
+            </div>
+          </div>
+          <div class="dist-row">
+            <div class="dist-dot" id="dist-dot"></div>
+            <div class="dist-txt" id="dist-txt">Driver distance: OK</div>
+          </div>
+        </div>
+
+        <!-- Stats -->
+        <div class="panel-card">
+          <div class="panel-title">Session Stats</div>
+          <div class="metrics-grid">
+            <div class="metric-cell">
+              <div class="metric-label">Drowsy alerts</div>
+              <div
+                class="metric-val"
+                id="stat-alerts"
+                style="color: var(--drowsy)"
+              >
+                0
+              </div>
+            </div>
+            <div class="metric-cell">
+              <div class="metric-label">Distractions</div>
+              <div
+                class="metric-val"
+                id="stat-distract"
+                style="color: var(--distract)"
+              >
+                0
+              </div>
+            </div>
+            <div class="metric-cell">
+              <div class="metric-label">Yawns</div>
+              <div
+                class="metric-val"
+                id="stat-yawns"
+                style="color: var(--warn)"
+              >
+                0
+              </div>
+            </div>
+            <div class="metric-cell">
+              <div class="metric-label">Blinks</div>
+              <div class="metric-val" id="stat-blinks">0</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Event log -->
+        <div class="panel-card" style="flex: 1">
+          <div class="panel-title">Event Log</div>
+          <div class="alert-list" id="alert-list">
+            <div class="no-events">No events yet — monitoring...</div>
+          </div>
+        </div>
+
+        <!-- Actions -->
+        <div class="panel-card">
+          <div class="actions">
+            <button
+              class="action-btn primary"
+              id="main-action"
+              onclick="handleAction()"
+            >
+              Analyse Image
+            </button>
+            <button class="action-btn" onclick="resetStats()">
+              Reset Session
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      let mode = "live",
+        poll = null,
+        fc = 0;
+      let soundOn = true,
+        audioCtx = null,
+        alarmTimer = null;
+      let lastAlerts = 0,
+        lastDistract = 0,
+        lastYawns = 0;
+      const eventLog = [];
+      const CONSEC_NEEDED = 48,
+        DISTRACT_NEEDED = 50;
+
+      /* ── AUDIO ── */
+      function initAudio() {
+        if (!audioCtx)
+          audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      }
+      function playBeep() {
+        if (!soundOn) return;
+        initAudio();
+        const o = audioCtx.createOscillator(),
+          g = audioCtx.createGain();
+        o.connect(g);
+        g.connect(audioCtx.destination);
+        o.type = "sine";
+        o.frequency.setValueAtTime(900, audioCtx.currentTime);
+        o.frequency.exponentialRampToValueAtTime(
+          440,
+          audioCtx.currentTime + 0.35,
+        );
+        g.gain.setValueAtTime(0.6, audioCtx.currentTime);
+        g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.45);
+        o.start(audioCtx.currentTime);
+        o.stop(audioCtx.currentTime + 0.45);
+      }
+      function startAlarm() {
+        if (alarmTimer) return;
+        playBeep();
+        alarmTimer = setInterval(playBeep, 900);
+      }
+      function stopAlarm() {
+        if (alarmTimer) {
+          clearInterval(alarmTimer);
+          alarmTimer = null;
+        }
+      }
+      function toggleSound() {
+        soundOn = !soundOn;
+        document.getElementById("snd-tog").classList.toggle("on", soundOn);
+        if (!soundOn) stopAlarm();
+      }
+
+      /* ── MODE ── */
+      function switchMode(m) {
+        mode = m;
+        document
+          .getElementById("tab-live")
+          .classList.toggle("active", m === "live");
+        document
+          .getElementById("tab-upload")
+          .classList.toggle("active", m === "upload");
+        document.getElementById("webcam-stream").style.display =
+          m === "live" ? "block" : "none";
+        document.getElementById("upload-zone").style.display =
+          m === "upload" ? "flex" : "none";
+        document.getElementById("preprocess-panel").style.display = "none";
+        document.getElementById("result-img").style.display = "none";
+        document.getElementById("main-action").textContent =
+          m === "live" ? "Live (auto)" : "Analyse Image";
+        document.getElementById("model-chip").textContent = "GBM";
+        if (m === "live") startPoll();
+        else {
+          stopPoll();
+          clearState();
+        }
+        // show drop area again
+        document.getElementById("upload-droparea").style.display = "flex";
+      }
+
+      function startPoll() {
+        if (poll) return;
+        poll = setInterval(fetchStats, 500);
+      }
+      function stopPoll() {
+        if (poll) {
+          clearInterval(poll);
+          poll = null;
+        }
+      }
+      async function fetchStats() {
+        try {
+          const r = await fetch("/stream_stats"),
+            d = await r.json();
+          fc++;
+          document.getElementById("frame-counter").textContent = "Frame: " + fc;
+          updateUI(d);
+        } catch (e) {}
+      }
+
+      /* ── PREPROCESSING ANIMATION ── */
+      const STEPS = ["decode", "mp", "ear", "mar", "head", "gbm"];
+      const STEP_DELAYS = [200, 500, 900, 1100, 1300, 1700]; // ms into animation
+
+      function resetSteps() {
+        STEPS.forEach((s) => {
+          const el = document.getElementById("step-" + s);
+          el.className = "pp-step";
+          document.getElementById("step-" + s + "-st").textContent = "waiting";
+        });
+        document.getElementById("feature-box").style.display = "none";
+        document.getElementById("feature-box").innerHTML = "";
+      }
+
+      function activateStep(id) {
+        document.getElementById("step-" + id).className = "pp-step active";
+        document.getElementById("step-" + id + "-st").textContent =
+          "running...";
+      }
+      function doneStep(id, val) {
+        document.getElementById("step-" + id).className = "pp-step done";
+        document.getElementById("step-" + id + "-st").textContent = val || "✓";
+      }
+      function errorStep(id) {
+        document.getElementById("step-" + id).className = "pp-step error";
+        document.getElementById("step-" + id + "-st").textContent = "✗ failed";
+      }
+
+      function runPipelineAnimation(onComplete) {
+        resetSteps();
+        document.getElementById("preprocess-panel").style.display = "flex";
+        document.getElementById("upload-droparea").style.display = "none";
+        document.getElementById("result-img").style.display = "none";
+
+        // step timings (ms)
+        const T = {
+          decode: 0,
+          mp: 300,
+          ear: 650,
+          mar: 850,
+          head: 1050,
+          gbm: 1300,
+        };
+        setTimeout(() => activateStep("decode"), T.decode);
+        setTimeout(() => {
+          doneStep("decode", "✓ decoded");
+          activateStep("mp");
+        }, T.mp);
+        setTimeout(() => {
+          doneStep("mp", "478 pts");
+          activateStep("ear");
+        }, T.ear);
+        setTimeout(() => {
+          doneStep("ear", "computing");
+          activateStep("mar");
+        }, T.mar);
+        setTimeout(() => {
+          doneStep("mar", "computing");
+          activateStep("head");
+        }, T.head);
+        setTimeout(() => {
+          doneStep("head", "computed");
+          activateStep("gbm");
+          onComplete();
+        }, T.gbm);
+      }
+
+      function showFeatures(d) {
+        const ear = d.ear || 0,
+          mar = d.mar || 0,
+          yaw = d.head_yaw || 0,
+          fw = d.face_width || 0;
+        const earCls = ear < 0.21 ? "fbad" : ear < 0.26 ? "fwarn" : "fok";
+        const marCls = mar > 0.6 ? "fbad" : mar > 0.45 ? "fwarn" : "fok";
+        const yaC = Math.abs(yaw) > 15 ? "fwarn" : "fok";
+        const box = document.getElementById("feature-box");
+        box.innerHTML = `
+          <span class="fv">ear</span>=<span class="${earCls}">${ear.toFixed(4)}</span> &nbsp;
+          <span class="fv">l_ear</span>=<span class="${earCls}">${(d.left_ear || 0).toFixed(4)}</span> &nbsp;
+          <span class="fv">r_ear</span>=<span class="${earCls}">${(d.right_ear || 0).toFixed(4)}</span><br>
+          <span class="fv">mar</span>=<span class="${marCls}">${mar.toFixed(4)}</span> &nbsp;
+          <span class="fv">head_yaw</span>=<span class="${yaC}">${yaw.toFixed(1)}°</span> &nbsp;
+          <span class="fv">face_w</span>=<span class="fok">${Math.round(fw)}px</span><br>
+          <span class="fv">ear_diff</span>=<span class="fv">${Math.abs((d.left_ear || 0) - (d.right_ear || 0)).toFixed(4)}</span> &nbsp;
+          <span class="fv">ear_mar_ratio</span>=<span class="fv">${(ear / (mar + 1e-6)).toFixed(3)}</span> &nbsp;
+          <span class="fv">gaze</span>=<span class="${d.gaze === "CENTER" ? "fok" : "fwarn"}">${d.gaze || "—"}</span>
+        `;
+        box.style.display = "block";
+        doneStep("gbm", "→ " + d.status);
+      }
+
+      /* ── UPDATE UI ── */
+      function updateUI(d) {
+        const score = d.score || 0,
+          status = d.status || "ALERT";
+        const isYawn = d.is_yawning || false,
+          isDist = d.is_distracted || false;
+        const tooFar = d.too_far || false,
+          consec = d.consec_eye || 0;
+        const cDist = d.consec_distract || 0,
+          gaze = d.gaze || "CENTER",
+          mar = d.mar || 0;
+
+        document.getElementById("score-num").textContent = score;
+        const sc =
+          score >= 60
+            ? "var(--drowsy)"
+            : score >= 30
+              ? "var(--warn)"
+              : "var(--alert)";
+        document.getElementById("score-num").style.color = sc;
+        document.getElementById("gauge-fill").style.width = score + "%";
+        document.getElementById("gauge-fill").style.background = sc;
+
+        const pct = Math.min(100, (consec / CONSEC_NEEDED) * 100);
+        const pc =
+          pct > 75
+            ? "var(--drowsy)"
+            : pct > 40
+              ? "var(--warn)"
+              : "var(--accent)";
+        document.getElementById("eye-prog").style.width = pct.toFixed(1) + "%";
+        document.getElementById("eye-prog").style.background = pc;
+        document.getElementById("consec-label").textContent =
+          consec + " / 48 frames";
+
+        const badge = document.getElementById("status-badge");
+        let ds = status;
+        if (tooFar) ds = "TOO_FAR";
+        else if (isYawn && status === "ALERT") ds = "YAWNING";
+        badge.textContent = ds === "TOO_FAR" ? "TOO FAR" : ds;
+        badge.className = "status-badge " + ds;
+
+        const drowsyOn = status === "DROWSY" && !tooFar;
+        const distractOn = isDist && status !== "DROWSY" && !tooFar;
+        document
+          .getElementById("drowsy-overlay")
+          .classList.toggle("active", drowsyOn);
+        document
+          .getElementById("distract-overlay")
+          .classList.toggle("active", distractOn);
+        document
+          .getElementById("video-wrap")
+          .classList.toggle("drowsy-border", drowsyOn);
+        document
+          .getElementById("video-wrap")
+          .classList.toggle("distract-border", distractOn && !drowsyOn);
+        if (drowsyOn) startAlarm();
+        else stopAlarm();
+
+        document
+          .getElementById("yawn-banner")
+          .classList.toggle("active", isYawn && !tooFar);
+        document.getElementById("yawn-ind").classList.toggle("active", isYawn);
+        document.getElementById("yawn-count").textContent =
+          (d.yawns || 0) + " yawns";
+        document
+          .getElementById("distract-ind")
+          .classList.toggle("active", isDist);
+        document.getElementById("gaze-label").textContent =
+          gaze + (isDist ? " (" + cDist + "/" + DISTRACT_NEEDED + ")" : "");
+
+        const maxE = 0.35,
+          le = d.left_ear || d.ear || 0,
+          re = d.right_ear || d.ear || 0;
+        const ec = (d.ear || 0) < 0.21 ? "var(--drowsy)" : "var(--accent)";
+        document.getElementById("l-ear-bar").style.width =
+          Math.min(100, (le / maxE) * 100) + "%";
+        document.getElementById("r-ear-bar").style.width =
+          Math.min(100, (re / maxE) * 100) + "%";
+        document.getElementById("l-ear-bar").style.background = ec;
+        document.getElementById("r-ear-bar").style.background = ec;
+        document.getElementById("l-ear-val").textContent = le.toFixed(3);
+        document.getElementById("r-ear-val").textContent = re.toFixed(3);
+
+        const marC =
+          mar > 0.6
+            ? "var(--drowsy)"
+            : mar > 0.45
+              ? "var(--warn)"
+              : "var(--accent)";
+        document.getElementById("mar-bar").style.width =
+          Math.min(100, (mar / 1.0) * 100) + "%";
+        document.getElementById("mar-bar").style.background = marC;
+        document.getElementById("mar-val").textContent = mar.toFixed(3);
+
+        document.getElementById("ear-overlay-text").textContent =
+          "EAR: " +
+          (d.ear || 0).toFixed(3) +
+          " | MAR: " +
+          mar.toFixed(3) +
+          " | Gaze: " +
+          gaze;
+        document.getElementById("model-chip").textContent =
+          d.model_used || "GBM";
+
+        const fw = d.face_width || 0;
+        document.getElementById("dist-dot").classList.toggle("far", tooFar);
+        document.getElementById("dist-txt").textContent = tooFar
+          ? "Too far — move closer (" + Math.round(fw) + "px)"
+          : "Driver distance OK (" + Math.round(fw) + "px)";
+
+        document.getElementById("stat-alerts").textContent = d.alerts || 0;
+        document.getElementById("stat-distract").textContent =
+          d.distractions || 0;
+        document.getElementById("stat-yawns").textContent = d.yawns || 0;
+        document.getElementById("stat-blinks").textContent = d.blinks || 0;
+
+        if ((d.alerts || 0) > lastAlerts) {
+          addEvent(
+            "drowsy",
+            "DROWSY #" + d.alerts + "  EAR=" + (d.ear || 0).toFixed(3),
+          );
+          lastAlerts = d.alerts;
+        }
+        if ((d.distractions || 0) > lastDistract) {
+          addEvent(
+            "distract",
+            "DISTRACTED #" + d.distractions + "  GAZE=" + gaze,
+          );
+          lastDistract = d.distractions;
+        }
+        if ((d.yawns || 0) > lastYawns) {
+          addEvent("yawn", "YAWN #" + d.yawns + "  MAR=" + mar.toFixed(3));
+          lastYawns = d.yawns;
+        }
+      }
+
+      function addEvent(type, msg) {
+        const t = new Date().toLocaleTimeString();
+        eventLog.unshift({ type, msg: "[" + t + "] " + msg });
+        renderLog();
+      }
+      function renderLog() {
+        const el = document.getElementById("alert-list");
+        if (!eventLog.length) {
+          el.innerHTML =
+            '<div class="no-events">No events yet — monitoring...</div>';
+          return;
+        }
+        el.innerHTML = eventLog
+          .slice(0, 30)
+          .map((e) => `<div class="alert-item ${e.type}">${e.msg}</div>`)
+          .join("");
+      }
+
+      function clearState() {
+        ["drowsy-overlay", "distract-overlay"].forEach((id) =>
+          document.getElementById(id).classList.remove("active"),
+        );
+        document
+          .getElementById("video-wrap")
+          .classList.remove("drowsy-border", "distract-border");
+        document.getElementById("yawn-banner").classList.remove("active");
+        document.getElementById("yawn-ind").classList.remove("active");
+        document.getElementById("distract-ind").classList.remove("active");
+        const b = document.getElementById("status-badge");
+        b.textContent = "—";
+        b.className = "status-badge NO_FACE";
+        stopAlarm();
+      }
+
+      function resetStats() {
+        eventLog.length = 0;
+        lastAlerts = 0;
+        lastDistract = 0;
+        lastYawns = 0;
+        fc = 0;
+        renderLog();
+        clearState();
+        ["stat-alerts", "stat-distract", "stat-yawns", "stat-blinks"].forEach(
+          (id) => (document.getElementById(id).textContent = "0"),
+        );
+        document.getElementById("score-num").textContent = "0";
+        document.getElementById("gauge-fill").style.width = "0%";
+        document.getElementById("eye-prog").style.width = "0%";
+        document.getElementById("consec-label").textContent = "0 / 48 frames";
+        document.getElementById("yawn-count").textContent = "0 yawns";
+        document.getElementById("gaze-label").textContent = "CENTER";
+        document.getElementById("frame-counter").textContent = "Frame: 0";
+        // reset upload zone
+        if (mode === "upload") {
+          document.getElementById("preprocess-panel").style.display = "none";
+          document.getElementById("result-img").style.display = "none";
+          document.getElementById("upload-droparea").style.display = "flex";
+          document.getElementById("file-input").value = "";
+          resetSteps();
+        }
+      }
+
+      /* ── MAIN ACTION: Upload + GBM ── */
+      async function handleAction() {
+        if (mode === "live") return;
+        const file = document.getElementById("file-input").files[0];
+        if (!file) {
+          alert("Select an image first");
+          return;
+        }
+
+        const btn = document.getElementById("main-action");
+        btn.innerHTML = '<span class="spinner"></span>Analysing…';
+        btn.disabled = true;
+
+        const fd = new FormData();
+        fd.append("file", file);
+
+        // Start pipeline animation, then fire request
+        let responseData = null;
+        let fetchDone = false;
+        let animDone = false;
+
+        function tryFinish() {
+          if (fetchDone && animDone && responseData) {
+            // show features + result image
+            showFeatures(responseData);
+            setTimeout(() => {
+              document.getElementById("preprocess-panel").style.display =
+                "none";
+              const ri = document.getElementById("result-img");
+              ri.src = "data:image/jpeg;base64," + responseData.image_b64;
+              ri.style.display = "block";
+              updateUI(responseData);
+            }, 700);
+          }
+        }
+
+        // run animation — when gbm step reached, consider anim done
+        runPipelineAnimation(() => {
+          animDone = true;
+          tryFinish();
+        });
+
+        try {
+          const r = await fetch("/predict", { method: "POST", body: fd });
+          const d = await r.json();
+          if (d.error) {
+            STEPS.forEach((s) => errorStep(s));
+            alert("Error: " + d.error);
+            btn.textContent = "Analyse Image";
+            btn.disabled = false;
+            return;
+          }
+          if (d.status === "NO_FACE") {
+            STEPS.forEach((s) => errorStep(s));
+            doneStep("decode", "✓");
+            errorStep("mp");
+            document.getElementById("preprocess-panel").style.display = "flex";
+            document.getElementById("upload-droparea").style.display = "none";
+            const badge = document.getElementById("status-badge");
+            badge.textContent = "NO FACE";
+            badge.className = "status-badge NO_FACE";
+            document.getElementById("ear-overlay-text").textContent =
+              "No face detected — try a clearer photo";
+            btn.textContent = "Analyse Image";
+            btn.disabled = false;
+            return;
+          }
+          responseData = d;
+          fetchDone = true;
+          tryFinish();
+        } catch (e) {
+          STEPS.forEach((s) => errorStep(s));
+          alert("Failed — is Flask running on :5000?");
+        } finally {
+          btn.textContent = "Analyse Image";
+          btn.disabled = false;
+        }
+      }
+
+      /* preview on file select */
+      document
+        .getElementById("file-input")
+        .addEventListener("change", function () {
+          if (this.files[0]) {
+            // just show drop area, don't auto-analyse
+            document.getElementById("result-img").style.display = "none";
+            document.getElementById("preprocess-panel").style.display = "none";
+            document.getElementById("upload-droparea").style.display = "flex";
+            resetSteps();
+          }
+        });
+
+      startPoll();
+    </script>
+  </body>
+</html>

@@ -1,0 +1,9 @@
+{
+  "ear_threshold": 0.21,
+  "mar_threshold": 0.6,
+  "consec_frames": 48,
+  "distraction_frames": 50,
+  "min_face_width_px": 120,
+  "left_eye_idx": [362, 385, 387, 263, 373, 380],
+  "right_eye_idx": [33, 160, 158, 133, 153, 144]
+}
